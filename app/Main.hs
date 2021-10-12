@@ -1,4 +1,4 @@
-{-# LANGUAGE InstanceSigs, FlexibleInstances, TypeSynonymInstances, DeriveFunctor #-}
+{-# LANGUAGE InstanceSigs,  FlexibleInstances, TypeSynonymInstances, DeriveFunctor #-}
 
 module Main where
 
@@ -12,6 +12,40 @@ import Data.Array
 import qualified Data.List.Safe as Safe
 
 data ND a = Var a | Choice (ND a) (ND a) | Fail deriving Functor
+
+type Game = Array (Int, Int) (Maybe Int)
+
+instance {-# OVERLAPPING #-} Read Game where 
+    readsPrec _ value = [(tryParse value, "")]
+        where 
+            tryParse :: String -> Game
+            tryParse input = listToGame input 
+
+            parseRow :: String -> [Maybe Int]
+            parseRow = foldr (\ch xs -> (readGameValue ch):xs) []
+
+
+            listToGame :: String -> Game
+            listToGame input = array ((0,0), (9,9)) $ parse input 9
+
+
+            indexRow :: Int -> [Maybe Int] -> [((Int,Int), Maybe Int)]
+            indexRow row xs = aux row xs 0
+                where   
+                    aux row [] _ = []
+                    aux row (x:xs) n = ((row, n), x) : aux row xs (n+1)
+
+            parse :: String -> Int -> [((Int, Int), Maybe Int)]
+            parse str 0 = indexRow 0 (parseRow (take 9 str))
+            parse str n = indexRow n (parseRow (take 9 str) ++ (parse (drop 10 str) (n-1))
+
+            readGameValue :: Char -> Maybe Int 
+            readGameValue ch = 
+                case ch of {
+                    '.' -> Nothing;
+                    _ -> Just (read [ch] :: Int) 
+                }
+
 
 instance Applicative ND where 
     pure :: a -> ND a
@@ -28,65 +62,25 @@ instance Monad ND where
     Fail >>= f = Fail 
     (Choice x y) >>= f = Choice (x >>= f) (y >>= f)
 
-(<***>) :: ND a -> ND a -> ND a 
-(<***>) = Choice 
-
-handle :: ND a -> [a]
-handle Fail = [] 
-handle (Var x) = return x
-handle (Choice x y) = handle x ++ handle y
+handle :: (b -> b -> b) -> (a -> b) -> b -> ND a -> b
+handle f g z (Var x) = g x
+handle f g z (Choice x y) = f (handle f g z x) (handle f g z y)
+handle f g z Fail = z
+ 
+handleList :: ND a -> [a]
+handleList = handle (++) (:[]) []
 
 once :: ND a -> a
-once = head . handle 
+once = head . handleList
 
-type Game = Array (Int, Int) (Maybe Int)
-
-{--
-instance Show Game where
-    show :: Game -> String
-    show gm = show gm
-        where 
-            printGame :: Game -> String 
-            printGame  = . assocs
-            printRow  :: Array i Int -> String 
-            printRow = foldr (\x xs -> maybe "." show x ++ xs) "" . assocs 
---}
-instance Read Game where 
-    readsPrec _ value = [(tryParse 9 value, "")]
-        where 
-            tryParse :: Int -> String -> Game
-            tryParse 0 input = listToGame (columnToList input 0)
-
-            listToGame :: [(Int, [(Int,Int)])] -> Game 
-            listToGame = array (0, 9) . intermed
-                where 
-                    intermed :: [(Int, [(Int, Int)])] -> [(Int, Array Int Int)]
-                    intermed = map (fmap (array (0,9)))
-
-            parseRow :: String -> Array Int Int 
-            parseRow str = array (0, 9) $ rowToList str 0
-
-            columnToList :: String -> Int -> [(Int, [(Int,Int)])]
-            columnToList str n = (n, rowToList (take 9 str) 0) : columnToList (drop 9 str) (n+1)
-
-            rowToList :: String -> Int -> [(Int,Int)]
-            rowTolist [] _ = [] 
-            rowToList (x:xs) n = maybe rest (\x -> (n + 1, x):rest) (readGameValue x) 
-                where
-                    rest = rowToList xs (n + 1)
-
-            readGameValue :: Char -> Maybe Int 
-            readGameValue ch = 
-                case ch of {
-                    '.' -> Nothing;
-                    _ -> Just (read [ch] :: Int) 
-                }
+(<***>) :: ND a -> ND a -> ND a
+x <***> y = Choice x y
 
 listToND :: [Int] -> ND Int
 listToND = foldr ((<***>) . return ) Fail
 
-removeMaybes :: [Maybe a] -> [a]
-removeMaybes = map (maybe 0 id) . filter (maybe False (\_ -> True))
+removeMaybes :: Num a => [Maybe a] -> [a]
+removeMaybes = map (maybe 0 id) . filter (maybe False (const True))
 
 submatrix :: Game -> Int -> Int -> Int -> Int -> [Int]
 submatrix gm startR endR startC endC = removeMaybes [v | ((i,j),v) <- assocs gm, startR <= i, i < endR, startC <= j, j < endC]
@@ -115,6 +109,7 @@ getFirstColumn = flip getNColumn 0
 getNRow :: Game -> Int -> [Maybe Int]
 getNRow gm n = [gm ! (n, i) | i <- [1..9]]
 
+
 getNRowNoMaybes :: Game -> Int -> [Int]
 getNRowNoMaybes gm n = removeMaybes $ getNRow gm n
 
@@ -127,6 +122,12 @@ getEmptyCell = foldr (\x xs -> Just x) Nothing . indices
 updateGame :: Game -> Int -> Int -> Int -> Game
 updateGame = undefined
 
+loadGame :: FilePath -> IO Game
+loadGame file = do {
+    contents <- readFile file;
+    return . read $ contents
+}
+
 solutions :: Game -> ND Game 
 solutions gm = 
     case getEmptyCell gm of 
@@ -136,16 +137,11 @@ solutions gm =
                 let gm' = updateGame gm i j num
                 return gm
 
-loadGame :: FilePath -> IO Game
-loadGame file = do { 
-    contents <- readFile file;
-    return . read $ contents
-}
-
 main :: IO ()
 main =  do {
     file <- openFile "Game.txt" ReadMode;
     contents <- hGetContents file ;
+    print contents ;
     print (read contents :: Game);
     hClose file
 }
